@@ -207,8 +207,10 @@
         const ey = b.y + Math.sin(b.angle) * b.len * prog;
 
         const baseWidth = Math.max(0.9, b.depth * 0.9);
-        // compensate lineWidth by effective scale so lines look consistent
-        ctx.lineWidth = Math.max(0.3, baseWidth / Math.max(0.0001, effectiveScale()));
+      // keep line width in world units so branches scale naturally with zoom
+// divide by dpr so rendering is consistent across devices
+const minWorldLine = 0.12; // минимальная толщина в мировых единицах (тонкая, но не нулевая)
+ctx.lineWidth = Math.max(minWorldLine, baseWidth / dpr);
         ctx.strokeStyle = strokeColorForDepth(b.depth);
 
         ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(ex, ey); ctx.stroke();
