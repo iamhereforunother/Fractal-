@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Фрактальное дерево — чистый вид + тема</title>
+  <title>Фрактальное дерево — корректный fit</title>
   <style>
     html,body{height:100%;margin:0}
     body{background:#000;color:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial}
-    canvas{:block}
+    canvas{display:block}
     .ui{position:fixed;left:16px;bottom:16px;color:#cbd5ffcc;font-size:13px;backdrop-filter:blur(6px);padding:8px 12px;border-radius:10px;display:flex;gap:8px;align-items:center}
     .ui input[type=range]{width:140px}
     .btn{background:transparent;border:1px solid rgba(255,255,255,0.08);padding:6px 10px;border-radius:8px;color:inherit;cursor:pointer}
@@ -17,7 +17,7 @@
 </head>
 <body>
   <canvas id="c"></canvas>
-  <div class="top-right">Фрактальное дерево — чистый минимал</div>
+  <div class="top-right">Фрактальное дерево — масштабируется под экран</div>
   <div class="ui">
     <div class="label">Глубина <span id="depthVal">11</span></div>
     <input id="depth" type="range" min="6" max="14" value="11">
@@ -28,17 +28,17 @@
   </div>
 
   <script>
-    // Параметры: увеличены базовая длина и растяжение (shrink чуть меньше, чтобы ветки длиннее)
+    // Параметры
     const state = {
       depth: 11,
       baseLength: 180,
-      shrink: 0.78,          // меньше — длиннее дочерние ветки
-      spread: Math.PI * 0.42, // чуть шире
+      shrink: 0.78,
+      spread: Math.PI * 0.42,
       trifurcateChance: 0.2,
       seed: 42,
-      appearSpeed: 280,      // скорость роста (пикселей/с)
+      appearSpeed: 280,
       delayBetweenBranches: 0.06,
-      theme: 'dark' // 'dark' = черный фон, белые ветви; 'light' = белый фон, тёмно-нави ветви
+      theme: 'dark'
     };
 
     const canvas = document.getElementById('c');
@@ -59,13 +59,16 @@
     function rng(seed){ let s = seed >>> 0; return function(){ s = (1664525 * s + 1013904223) >>> 0; return s / 4294967296; }; }
 
     class Branch{
-      constructor(x,y,angle,len,depth,parent=null){ this.x = x; this.y = y; this.angle = angle; this.len = len; this.depth = depth; this.parent = parent; this.children = []; this.start = 0; }
-      end(){ return {x: this.x + Math.cos(this.angle)*this.len, y: this.y + Math.sin(this.angle)*this.len}; }
+      constructor(x,y,angle,len,depth,parent=null){ this.x=x;this.y=y;this.angle=angle;this.len=len;this.depth=depth;this.parent=parent;this.children=[];this.start=0; }
+      end(){ return {x:this.x+Math.cos(this.angle)*this.len, y:this.y+Math.sin(this.angle)*this.len}; }
     }
 
     let branches = [];
     let root = null;
     let startTimestamp = 0;
+
+    // viewport transform to fit tree into screen
+    let view = { scale: 1, tx: 0, ty: 0, pad: 40 };
 
     function generate(seed){
       branches.length = 0;
@@ -113,36 +116,64 @@
 
       grow(root);
 
-      // сортировка по времени появления
+      // После генерации пересчитаем Viewport: найдем bounding box и подгоним scale/offset
+      computeViewport();
+
+      // сортировка по стартовому времени – для корректной анимации
       branches.sort((a,b)=> a.start - b.start);
     }
 
-    function clearAndFillBackground(){
-      // фон зависит от темы
-      if(state.theme === 'dark'){
-        ctx.fillStyle = '#000';
-        document.body.style.background = '#000';
-      } else {
-        ctx.fillStyle = '#fff';
-        document.body.style.background = '#fff';
+    function computeViewport(){
+      if(branches.length === 0) { view.scale = 1; view.tx = 0; view.ty = 0; return; }
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for(const b of branches){
+        minX = Math.min(minX, b.x); minY = Math.min(minY, b.y);
+        const e = b.end(); maxX = Math.max(maxX, e.x); maxY = Math.max(maxY, e.y);
       }
+      // включим корневую точку в bbox
+      minX = Math.min(minX, root.x); minY = Math.min(minY, root.y);
+      maxX = Math.max(maxX, root.x); maxY = Math.max(maxY, root.y);
+
+      const width = Math.max(1, maxX - minX);
+      const height = Math.max(1, maxY - minY);
+
+      const pad = view.pad;
+      const availW = window.innerWidth - pad*2;
+      const availH = window.innerHeight - pad*2;
+
+      // scale чтобы вместить всё в экран, допускаем увеличение до 1.0 (чтобы не растягивать чрезмерно)
+      let scaleX = availW / width;
+      let scaleY = availH / height;
+      // Ограничим scale сверху, но если width/height очень малы — не масштабировать больше 1.0
+      const scale = Math.min(scaleX, scaleY, 1.0);
+      view.scale = scale;
+
+      // Смещение чтобы объект оказался в видимой зоне с padding
+      view.tx = -minX * scale + pad;
+      view.ty = -minY * scale + pad;
+
+      // Если tree расположен слишком смещённо по вертикали — немного центрируем
+      // Например, если сверху много пустоты — сдвинем вниз
+      const treeCenterY = (minY + maxY) / 2 * scale + view.ty;
+      const desiredCenterY = window.innerHeight * 0.48;
+      view.ty += desiredCenterY - treeCenterY;
+    }
+
+    function clearAndFillBackground(){
+      if(state.theme === 'dark'){
+        ctx.fillStyle = '#000'; document.body.style.background = '#000';
+      } else { ctx.fillStyle = '#fff'; document.body.style.background = '#fff'; }
       ctx.fillRect(0,0,window.innerWidth,window.innerHeight);
     }
 
     function strokeColorForDepth(depth){
       if(state.theme === 'dark'){
-        // белые ветви, чуть тоньше на концах
-        const alpha = Math.max(0.55, 0.96 - (state.depth - depth)*0.04);
+        const alpha = Math.max(0.6, 0.98 - (state.depth - depth)*0.035);
         return `rgba(255,255,255,${alpha})`;
       } else {
-        // тёмно-navy: #001f3f
-        const base = [0x00,0x1f,0x3f];
-        const t = 0.08 + (depth/state.depth) * 0.22; // легкая градация
-        const r = Math.round(base[0] + (255-base[0]) * t * 0.0); // остаёмся тёмными
-        const g = Math.round(base[1] + (255-base[1]) * t * 0.0);
-        const b = Math.round(base[2] + (255-base[2]) * t * 0.0);
+        // dark navy #001f3f
         const alpha = 1.0 - (state.depth - depth) * 0.02;
-        return `rgba(${r},${g},${b},${alpha})`;
+        return `rgba(0,31,63,${alpha})`;
       }
     }
 
@@ -154,8 +185,12 @@
 
       clearAndFillBackground();
 
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
+      // Применяем трансформ, чтобы вместить дерево на экран
+      ctx.save();
+      ctx.translate(view.tx, view.ty);
+      ctx.scale(view.scale, view.scale);
+
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
 
       for(let i=0;i<branches.length;i++){
         const b = branches[i];
@@ -164,16 +199,15 @@
         const ex = b.x + Math.cos(b.angle) * b.len * prog;
         const ey = b.y + Math.sin(b.angle) * b.len * prog;
 
-        const w = Math.max(0.9, b.depth * 0.9);
-        ctx.lineWidth = w;
+        // Учитываем масштаб: ширина в мировых координатах должна компенсироваться
+        const baseWidth = Math.max(0.9, b.depth * 0.9);
+        ctx.lineWidth = Math.max(0.3, baseWidth / Math.max(0.0001, view.scale));
         ctx.strokeStyle = strokeColorForDepth(b.depth);
 
-        ctx.beginPath();
-        ctx.moveTo(b.x, b.y);
-        ctx.lineTo(ex, ey);
-        ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(ex, ey); ctx.stroke();
       }
 
+      ctx.restore();
       requestAnimationFrame(render);
     }
 
@@ -192,10 +226,10 @@
 
     function regenerate(){ generate(state.seed); startTimestamp = performance.now(); last = null; }
 
-    // init
+    // Инициализация
     depthVal.textContent = state.depth; lenVal.textContent = state.baseLength; regenerate(); requestAnimationFrame(render);
 
-    window.addEventListener('resize', ()=>{ setTimeout(()=>{ fit(); regenerate(); }, 120); });
+    window.addEventListener('resize', ()=>{ setTimeout(()=>{ fit(); computeViewport(); regenerate(); }, 120); });
     canvas.addEventListener('click', ()=>{ state.seed = Math.floor(Math.random()*1e9); regenerate(); });
   </script>
 </body>
