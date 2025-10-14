@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Фрактальное дерево — корректный fit</title>
+  <title>Фрактальное дерево — масштаб и пан</title>
   <style>
     html,body{height:100%;margin:0}
     body{background:#000;color:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial}
-    canvas{display:block}
-    .ui{position:fixed;left:16px;bottom:16px;color:#cbd5ffcc;font-size:13px;backdrop-filter:blur(6px);padding:8px 12px;border-radius:10px;display:flex;gap:8px;align-items:center}
-    .ui input[type=range]{width:140px}
+    canvas{display:block;touch-action:none}
+    .ui{position:fixed;left:12px;bottom:12px;color:#cbd5ffcc;font-size:13px;backdrop-filter:blur(6px);padding:8px 12px;border-radius:10px;display:flex;gap:8px;align-items:center}
+    .ui input[type=range]{width:120px}
     .btn{background:transparent;border:1px solid rgba(255,255,255,0.08);padding:6px 10px;border-radius:8px;color:inherit;cursor:pointer}
     .top-right{position:fixed;right:16px;top:16px;color:#9aa0ff66;font-size:13px;padding:6px 10px;border-radius:8px}
     .label{font-size:12px;color:#aeb8ffcc}
@@ -17,13 +17,16 @@
 </head>
 <body>
   <canvas id="c"></canvas>
-  <div class="top-right">Фрактальное дерево — масштабируется под экран</div>
+  <div class="top-right">Масштаб: колесо мыши / перетаскивание / pinch</div>
   <div class="ui">
     <div class="label">Глубина <span id="depthVal">11</span></div>
     <input id="depth" type="range" min="6" max="14" value="11">
     <div class="label">Длина <span id="lenVal">180</span></div>
     <input id="baseLen" type="range" min="60" max="360" value="180">
     <button id="regen" class="btn">Реген</button>
+    <button id="fit" class="btn">Fit</button>
+    <button id="zoomIn" class="btn">＋</button>
+    <button id="zoomOut" class="btn">－</button>
     <button id="toggleTheme" class="btn">Светлая тема</button>
   </div>
 
@@ -45,7 +48,7 @@
     const ctx = canvas.getContext('2d');
     let dpr = Math.max(1, window.devicePixelRatio || 1);
 
-    function fit(){
+    function fitCanvas(){
       dpr = Math.max(1, window.devicePixelRatio || 1);
       canvas.width = Math.floor(window.innerWidth * dpr);
       canvas.height = Math.floor(window.innerHeight * dpr);
@@ -53,22 +56,21 @@
       canvas.style.height = window.innerHeight + 'px';
       ctx.setTransform(dpr,0,0,dpr,0,0);
     }
-    window.addEventListener('resize', fit);
-    fit();
+    window.addEventListener('resize', fitCanvas);
+    fitCanvas();
 
     function rng(seed){ let s = seed >>> 0; return function(){ s = (1664525 * s + 1013904223) >>> 0; return s / 4294967296; }; }
 
-    class Branch{
-      constructor(x,y,angle,len,depth,parent=null){ this.x=x;this.y=y;this.angle=angle;this.len=len;this.depth=depth;this.parent=parent;this.children=[];this.start=0; }
-      end(){ return {x:this.x+Math.cos(this.angle)*this.len, y:this.y+Math.sin(this.angle)*this.len}; }
-    }
+    class Branch{ constructor(x,y,angle,len,depth,parent=null){ this.x=x;this.y=y;this.angle=angle;this.len=len;this.depth=depth;this.parent=parent;this.children=[];this.start=0; } end(){ return {x:this.x+Math.cos(this.angle)*this.len, y:this.y+Math.sin(this.angle)*this.len}; } }
 
     let branches = [];
     let root = null;
     let startTimestamp = 0;
 
-    // viewport transform to fit tree into screen
-    let view = { scale: 1, tx: 0, ty: 0, pad: 40 };
+    // viewport: scaleDefault computed to fit tree, userScale is interactive zoom, offset for pan
+    let view = { scaleDefault:1, userScale:1, tx:0, ty:0, pad:40 };
+
+    function effectiveScale(){ return view.scaleDefault * view.userScale; }
 
     function generate(seed){
       branches.length = 0;
@@ -115,22 +117,17 @@
       }
 
       grow(root);
-
-      // После генерации пересчитаем Viewport: найдем bounding box и подгоним scale/offset
       computeViewport();
-
-      // сортировка по стартовому времени – для корректной анимации
       branches.sort((a,b)=> a.start - b.start);
     }
 
     function computeViewport(){
-      if(branches.length === 0) { view.scale = 1; view.tx = 0; view.ty = 0; return; }
+      if(branches.length === 0){ view.scaleDefault = 1; view.tx = 0; view.ty = 0; return; }
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       for(const b of branches){
         minX = Math.min(minX, b.x); minY = Math.min(minY, b.y);
         const e = b.end(); maxX = Math.max(maxX, e.x); maxY = Math.max(maxY, e.y);
       }
-      // включим корневую точку в bbox
       minX = Math.min(minX, root.x); minY = Math.min(minY, root.y);
       maxX = Math.max(maxX, root.x); maxY = Math.max(maxY, root.y);
 
@@ -141,40 +138,50 @@
       const availW = window.innerWidth - pad*2;
       const availH = window.innerHeight - pad*2;
 
-      // scale чтобы вместить всё в экран, допускаем увеличение до 1.0 (чтобы не растягивать чрезмерно)
-      let scaleX = availW / width;
-      let scaleY = availH / height;
-      // Ограничим scale сверху, но если width/height очень малы — не масштабировать больше 1.0
-      const scale = Math.min(scaleX, scaleY, 1.0);
-      view.scale = scale;
+      // scaleDefault — масштаб, чтобы уместить дерево в экран (может быть >1 если дерево очень малень)
+      const scaleX = availW / width;
+      const scaleY = availH / height;
+      const scaleDefault = Math.min(scaleX, scaleY);
+      view.scaleDefault = scaleDefault;
 
-      // Смещение чтобы объект оказался в видимой зоне с padding
-      view.tx = -minX * scale + pad;
-      view.ty = -minY * scale + pad;
+      // Центрируем дерево в окне
+      const centerWorldX = (minX + maxX) / 2;
+      const centerWorldY = (minY + maxY) / 2;
+      const targetScreenX = window.innerWidth / 2;
+      const targetScreenY = window.innerHeight * 0.48;
 
-      // Если tree расположен слишком смещённо по вертикали — немного центрируем
-      // Например, если сверху много пустоты — сдвинем вниз
-      const treeCenterY = (minY + maxY) / 2 * scale + view.ty;
-      const desiredCenterY = window.innerHeight * 0.48;
-      view.ty += desiredCenterY - treeCenterY;
+      view.tx = targetScreenX - centerWorldX * view.scaleDefault;
+      view.ty = targetScreenY - centerWorldY * view.scaleDefault;
+
+      // Сбрасываем пользовательский зум и пан
+      view.userScale = 1;
+      view.userTx = 0; view.userTy = 0;
     }
 
     function clearAndFillBackground(){
-      if(state.theme === 'dark'){
-        ctx.fillStyle = '#000'; document.body.style.background = '#000';
-      } else { ctx.fillStyle = '#fff'; document.body.style.background = '#fff'; }
+      if(state.theme === 'dark'){ ctx.fillStyle = '#000'; document.body.style.background = '#000'; } else { ctx.fillStyle = '#fff'; document.body.style.background = '#fff'; }
       ctx.fillRect(0,0,window.innerWidth,window.innerHeight);
     }
 
     function strokeColorForDepth(depth){
-      if(state.theme === 'dark'){
-        const alpha = Math.max(0.6, 0.98 - (state.depth - depth)*0.035);
-        return `rgba(255,255,255,${alpha})`;
-      } else {
-        // dark navy #001f3f
-        const alpha = 1.0 - (state.depth - depth) * 0.02;
-        return `rgba(0,31,63,${alpha})`;
-      }
+      if(state.theme === 'dark'){ const alpha = Math.max(0.6, 0.98 - (state.depth - depth)*0.035); return `rgba(255,255,255,${alpha})`; }
+      else { const alpha = 1.0 - (state.depth - depth) * 0.02; return `rgba(0,31,63,${alpha})`; }
+    }
+
+    // Convert screen coords to world coords (taking into account both default and user transforms)
+    function screenToWorld(sx, sy){
+      const eff = effectiveScale();
+      const tx = view.tx + (view.userTx || 0);
+      const ty = view.ty + (view.userTy || 0);
+      return { x: (sx - tx) / eff, y: (sy - ty) / eff };
+    }
+
+    // Apply transforms for drawing
+    function applyTransform(){
+      const eff = effectiveScale();
+      const tx = view.tx + (view.userTx || 0);
+      const ty = view.ty + (view.userTy || 0);
+      ctx.setTransform(eff * dpr, 0, 0, eff * dpr, tx * dpr, ty * dpr);
     }
 
     let last = null;
@@ -183,12 +190,12 @@
       const dt = (ts - last)/1000; last = ts;
       const elapsed = (ts - startTimestamp)/1000;
 
+      // clear using default identity transform for full pixel clear
+      ctx.setTransform(dpr,0,0,dpr,0,0);
       clearAndFillBackground();
 
-      // Применяем трансформ, чтобы вместить дерево на экран
-      ctx.save();
-      ctx.translate(view.tx, view.ty);
-      ctx.scale(view.scale, view.scale);
+      // apply world transform
+      applyTransform();
 
       ctx.lineCap = 'round'; ctx.lineJoin = 'round';
 
@@ -199,19 +206,76 @@
         const ex = b.x + Math.cos(b.angle) * b.len * prog;
         const ey = b.y + Math.sin(b.angle) * b.len * prog;
 
-        // Учитываем масштаб: ширина в мировых координатах должна компенсироваться
         const baseWidth = Math.max(0.9, b.depth * 0.9);
-        ctx.lineWidth = Math.max(0.3, baseWidth / Math.max(0.0001, view.scale));
+        // compensate lineWidth by effective scale so lines look consistent
+        ctx.lineWidth = Math.max(0.3, baseWidth / Math.max(0.0001, effectiveScale()));
         ctx.strokeStyle = strokeColorForDepth(b.depth);
 
         ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(ex, ey); ctx.stroke();
       }
 
-      ctx.restore();
+      // reset transform for UI drawing if needed
+      ctx.setTransform(dpr,0,0,dpr,0,0);
       requestAnimationFrame(render);
     }
 
-    // UI
+    // --- Interactions: zoom (wheel/pinch/buttons), pan (drag) ---
+    const zoomInBtn = document.getElementById('zoomIn');
+    const zoomOutBtn = document.getElementById('zoomOut');
+    const fitBtn = document.getElementById('fit');
+
+    function setUserScaleAt(newUserScale, screenX, screenY){
+      // keep world point under (screenX,screenY) stable when zooming
+      const before = screenToWorld(screenX, screenY);
+      view.userScale = Math.max(0.1, Math.min(6, newUserScale));
+      const after = screenToWorld(screenX, screenY);
+      // adjust userTx/userTy so the point didn't move
+      view.userTx = (view.userTx || 0) + (after.x - before.x) * effectiveScale();
+      view.userTy = (view.userTy || 0) + (after.y - before.y) * effectiveScale();
+    }
+
+    zoomInBtn.addEventListener('click', ()=>{ const centerX = window.innerWidth/2, centerY = window.innerHeight/2; setUserScaleAt(view.userScale * 1.2, centerX, centerY); });
+    zoomOutBtn.addEventListener('click', ()=>{ const centerX = window.innerWidth/2, centerY = window.innerHeight/2; setUserScaleAt(view.userScale / 1.2, centerX, centerY); });
+    fitBtn.addEventListener('click', ()=>{ computeViewport(); });
+
+    // wheel to zoom
+    canvas.addEventListener('wheel', (e)=>{
+      e.preventDefault();
+      const delta = -e.deltaY;
+      const zoomFactor = Math.exp(delta * 0.0012);
+      setUserScaleAt(view.userScale * zoomFactor, e.clientX, e.clientY);
+    }, { passive:false });
+
+    // pan with mouse drag
+    let panning = false, lastMouse = null;
+    canvas.addEventListener('mousedown', (e)=>{
+      panning = true; lastMouse = {x:e.clientX, y:e.clientY};
+      canvas.style.cursor = 'grabbing';
+    });
+    window.addEventListener('mousemove', (e)=>{
+      if(!panning) return;
+      const dx = e.clientX - lastMouse.x; const dy = e.clientY - lastMouse.y;
+      view.userTx = (view.userTx || 0) + dx; view.userTy = (view.userTy || 0) + dy;
+      lastMouse = {x:e.clientX, y:e.clientY};
+    });
+    window.addEventListener('mouseup', ()=>{ panning=false; canvas.style.cursor='default'; });
+
+    // touch: pinch to zoom + drag
+    let touchState = { mode: 'none', x1:0,y1:0,x2:0,y2:0, dist:0 };
+    canvas.addEventListener('touchstart', (e)=>{
+      if(e.touches.length === 1){ touchState.mode='drag'; touchState.x1 = e.touches[0].clientX; touchState.y1 = e.touches[0].clientY; }
+      else if(e.touches.length === 2){ touchState.mode='pinch'; touchState.x1=e.touches[0].clientX; touchState.y1=e.touches[0].clientY; touchState.x2=e.touches[1].clientX; touchState.y2=e.touches[1].clientY; touchState.dist = Math.hypot(touchState.x2-touchState.x1, touchState.y2-touchState.y1); }
+    }, {passive:true});
+
+    canvas.addEventListener('touchmove', (e)=>{
+      e.preventDefault();
+      if(touchState.mode === 'drag' && e.touches.length===1){ const dx = e.touches[0].clientX - touchState.x1; const dy = e.touches[0].clientY - touchState.y1; view.userTx = (view.userTx||0) + dx; view.userTy = (view.userTy||0) + dy; touchState.x1 = e.touches[0].clientX; touchState.y1 = e.touches[0].clientY; }
+      else if(touchState.mode==='pinch' && e.touches.length===2){ const nx1=e.touches[0].clientX, ny1=e.touches[0].clientY, nx2=e.touches[1].clientX, ny2=e.touches[1].clientY; const nd = Math.hypot(nx2-nx1, ny2-ny1); const centerX=(nx1+nx2)/2, centerY=(ny1+ny2)/2; const factor = nd / (touchState.dist || nd); setUserScaleAt(view.userScale * factor, centerX, centerY); touchState.x1=nx1; touchState.y1=ny1; touchState.x2=nx2; touchState.y2=ny2; touchState.dist=nd; }
+    }, {passive:false});
+
+    canvas.addEventListener('touchend', (e)=>{ if(e.touches.length===0) touchState.mode='none'; else if(e.touches.length===1){ touchState.mode='drag'; touchState.x1=e.touches[0].clientX; touchState.y1=e.touches[0].clientY; } }, {passive:true});
+
+    // --- UI controls and regen ---
     const depthEl = document.getElementById('depth');
     const depthVal = document.getElementById('depthVal');
     const baseEl = document.getElementById('baseLen');
@@ -226,11 +290,12 @@
 
     function regenerate(){ generate(state.seed); startTimestamp = performance.now(); last = null; }
 
-    // Инициализация
+    // init
     depthVal.textContent = state.depth; lenVal.textContent = state.baseLength; regenerate(); requestAnimationFrame(render);
 
-    window.addEventListener('resize', ()=>{ setTimeout(()=>{ fit(); computeViewport(); regenerate(); }, 120); });
-    canvas.addEventListener('click', ()=>{ state.seed = Math.floor(Math.random()*1e9); regenerate(); });
+    // double-click to fit
+    canvas.addEventListener('dblclick', ()=>{ computeViewport(); });
+
   </script>
 </body>
 </html>
