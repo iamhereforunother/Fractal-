@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Фрактальное дерево — чистый вид + тема</title>
+  <style>
+    html,body{height:100%;margin:0}
+    body{background:#000;color:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial}
+    canvas{display:block}
+    .ui{position:fixed;left:16px;bottom:16px;color:#cbd5ffcc;font-size:13px;backdrop-filter:blur(6px);padding:8px 12px;border-radius:10px;display:flex;gap:8px;align-items:center}
+    .ui input[type=range]{width:140px}
+    .btn{background:transparent;border:1px solid rgba(255,255,255,0.08);padding:6px 10px;border-radius:8px;color:inherit;cursor:pointer}
+    .top-right{position:fixed;right:16px;top:16px;color:#9aa0ff66;font-size:13px;padding:6px 10px;border-radius:8px}
+    .label{font-size:12px;color:#aeb8ffcc}
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div class="top-right">Фрактальное дерево — чистый минимал</div>
+  <div class="ui">
+    <div class="label">Глубина <span id="depthVal">11</span></div>
+    <input id="depth" type="range" min="6" max="14" value="11">
+    <div class="label">Длина <span id="lenVal">180</span></div>
+    <input id="baseLen" type="range" min="60" max="360" value="180">
+    <button id="regen" class="btn">Реген</button>
+    <button id="toggleTheme" class="btn">Светлая тема</button>
+  </div>
+
+  <script>
+    // Параметры: увеличены базовая длина и растяжение (shrink чуть меньше, чтобы ветки длиннее)
+    const state = {
+      depth: 11,
+      baseLength: 180,
+      shrink: 0.78,          // меньше — длиннее дочерние ветки
+      spread: Math.PI * 0.42, // чуть шире
+      trifurcateChance: 0.2,
+      seed: 42,
+      appearSpeed: 280,      // скорость роста (пикселей/с)
+      delayBetweenBranches: 0.06,
+      theme: 'dark' // 'dark' = черный фон, белые ветви; 'light' = белый фон, тёмно-нави ветви
+    };
+
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    let dpr = Math.max(1, window.devicePixelRatio || 1);
+
+    function fit(){
+      dpr = Math.max(1, window.devicePixelRatio || 1);
+      canvas.width = Math.floor(window.innerWidth * dpr);
+      canvas.height = Math.floor(window.innerHeight * dpr);
+      canvas.style.width = window.innerWidth + 'px';
+      canvas.style.height = window.innerHeight + 'px';
+      ctx.setTransform(dpr,0,0,dpr,0,0);
+    }
+    window.addEventListener('resize', fit);
+    fit();
+
+    function rng(seed){ let s = seed >>> 0; return function(){ s = (1664525 * s + 1013904223) >>> 0; return s / 4294967296; }; }
+
+    class Branch{
+      constructor(x,y,angle,len,depth,parent=null){ this.x = x; this.y = y; this.angle = angle; this.len = len; this.depth = depth; this.parent = parent; this.children = []; this.start = 0; }
+      end(){ return {x: this.x + Math.cos(this.angle)*this.len, y: this.y + Math.sin(this.angle)*this.len}; }
+    }
+
+    let branches = [];
+    let root = null;
+    let startTimestamp = 0;
+
+    function generate(seed){
+      branches.length = 0;
+      const r = rng(seed);
+      const startX = 80;
+      const startY = window.innerHeight * 0.38;
+      root = new Branch(startX, startY, 0, state.baseLength, state.depth, null);
+      root.start = 0;
+      branches.push(root);
+
+      function grow(b){
+        if(b.depth <= 0 || b.len < 2) return;
+        const chance = r();
+        let n = 2; if(chance < state.trifurcateChance) n = 3;
+        const baseSpread = state.spread * (0.8 + (r()-0.5)*0.4);
+        const baseShrink = state.shrink * (0.86 + (r()-0.5)*0.28);
+
+        if(n === 2){
+          const leftAngle = b.angle - baseSpread * (0.6 + (r()-0.5)*0.6);
+          const rightAngle = b.angle + baseSpread * (0.6 + (r()-0.5)*0.6);
+          const left = new Branch(b.end().x, b.end().y, leftAngle, b.len * baseShrink, b.depth - 1, b);
+          const right = new Branch(b.end().x, b.end().y, rightAngle, b.len * baseShrink, b.depth - 1, b);
+          const parentAppearTime = b.start + (b.len / state.appearSpeed);
+          left.start = parentAppearTime + state.delayBetweenBranches;
+          right.start = parentAppearTime + state.delayBetweenBranches * 1.6;
+          b.children.push(left, right);
+          branches.push(left, right);
+          grow(left); grow(right);
+        } else {
+          const midAngle = b.angle + (r()-0.5)*0.12;
+          const leftAngle = b.angle - baseSpread * (0.9 + (r()-0.5)*0.4);
+          const rightAngle = b.angle + baseSpread * (0.9 + (r()-0.5)*0.4);
+          const mid = new Branch(b.end().x, b.end().y, midAngle, b.len * baseShrink * (0.95 + (r()-0.5)*0.1), b.depth - 1, b);
+          const left = new Branch(b.end().x, b.end().y, leftAngle, b.len * baseShrink, b.depth - 1, b);
+          const right = new Branch(b.end().x, b.end().y, rightAngle, b.len * baseShrink, b.depth - 1, b);
+          const parentAppearTime = b.start + (b.len / state.appearSpeed);
+          left.start = parentAppearTime + state.delayBetweenBranches;
+          mid.start = parentAppearTime + state.delayBetweenBranches * 1.3;
+          right.start = parentAppearTime + state.delayBetweenBranches * 2.0;
+          b.children.push(left, mid, right);
+          branches.push(left, mid, right);
+          grow(left); grow(mid); grow(right);
+        }
+      }
+
+      grow(root);
+
+      // сортировка по времени появления
+      branches.sort((a,b)=> a.start - b.start);
+    }
+
+    function clearAndFillBackground(){
+      // фон зависит от темы
+      if(state.theme === 'dark'){
+        ctx.fillStyle = '#000';
+        document.body.style.background = '#000';
+      } else {
+        ctx.fillStyle = '#fff';
+        document.body.style.background = '#fff';
+      }
+      ctx.fillRect(0,0,window.innerWidth,window.innerHeight);
+    }
+
+    function strokeColorForDepth(depth){
+      if(state.theme === 'dark'){
+        // белые ветви, чуть тоньше на концах
+        const alpha = Math.max(0.55, 0.96 - (state.depth - depth)*0.04);
+        return `rgba(255,255,255,${alpha})`;
+      } else {
+        // тёмно-navy: #001f3f
+        const base = [0x00,0x1f,0x3f];
+        const t = 0.08 + (depth/state.depth) * 0.22; // легкая градация
+        const r = Math.round(base[0] + (255-base[0]) * t * 0.0); // остаёмся тёмными
+        const g = Math.round(base[1] + (255-base[1]) * t * 0.0);
+        const b = Math.round(base[2] + (255-base[2]) * t * 0.0);
+        const alpha = 1.0 - (state.depth - depth) * 0.02;
+        return `rgba(${r},${g},${b},${alpha})`;
+      }
+    }
+
+    let last = null;
+    function render(ts){
+      if(!last) last = ts;
+      const dt = (ts - last)/1000; last = ts;
+      const elapsed = (ts - startTimestamp)/1000;
+
+      clearAndFillBackground();
+
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      for(let i=0;i<branches.length;i++){
+        const b = branches[i];
+        const local = Math.max(0, elapsed - b.start);
+        const prog = Math.min(1, (local * state.appearSpeed) / (b.len + 1e-6));
+        const ex = b.x + Math.cos(b.angle) * b.len * prog;
+        const ey = b.y + Math.sin(b.angle) * b.len * prog;
+
+        const w = Math.max(0.9, b.depth * 0.9);
+        ctx.lineWidth = w;
+        ctx.strokeStyle = strokeColorForDepth(b.depth);
+
+        ctx.beginPath();
+        ctx.moveTo(b.x, b.y);
+        ctx.lineTo(ex, ey);
+        ctx.stroke();
+      }
+
+      requestAnimationFrame(render);
+    }
+
+    // UI
+    const depthEl = document.getElementById('depth');
+    const depthVal = document.getElementById('depthVal');
+    const baseEl = document.getElementById('baseLen');
+    const lenVal = document.getElementById('lenVal');
+    const regen = document.getElementById('regen');
+    const toggle = document.getElementById('toggleTheme');
+
+    depthEl.addEventListener('input', ()=>{ state.depth = parseInt(depthEl.value); depthVal.textContent = state.depth; regenerate(); });
+    baseEl.addEventListener('input', ()=>{ state.baseLength = parseInt(baseEl.value); lenVal.textContent = state.baseLength; regenerate(); });
+    regen.addEventListener('click', ()=>{ state.seed = Math.floor(Math.random()*1e9); regenerate(); });
+    toggle.addEventListener('click', ()=>{ state.theme = state.theme === 'dark' ? 'light' : 'dark'; toggle.textContent = state.theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'; regenerate(); });
+
+    function regenerate(){ generate(state.seed); startTimestamp = performance.now(); last = null; }
+
+    // init
+    depthVal.textContent = state.depth; lenVal.textContent = state.baseLength; regenerate(); requestAnimationFrame(render);
+
+    window.addEventListener('resize', ()=>{ setTimeout(()=>{ fit(); regenerate(); }, 120); });
+    canvas.addEventListener('click', ()=>{ state.seed = Math.floor(Math.random()*1e9); regenerate(); });
+  </script>
+</body>
+</html>
